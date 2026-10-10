@@ -10,10 +10,9 @@ Repository: https://github.com/vishalchandol/Lucidity_task
 ## Architecture
 
 [Architecture diagram and numbered execution flow](docs/architecture.md)
-are available in Markdown and as a [Word document](docs/architecture-cloudwatch.docx).
+are available in Markdown.
 
-The design separates configuration from monitoring: Ansible configures the VMs,
-but metric collection continues even when the controller is unavailable. Default
+The design separates configuration from monitoring: Ansible configures the VMs. Default
 EC2 and EBS metrics do not expose guest filesystem free space, which is why the
 CloudWatch Agent is needed.
 
@@ -64,8 +63,6 @@ personal account, never company AWS.
 
 Agent installation currently targets Amazon Linux 2023; Windows VMs are discovered
 but not configured. Ansible needs a Linux/WSL controller. Terraform validation
-has passed locally; live SSM access, agent publication, alarm delivery and
-cross-account visibility have not been tested.
+has passed locally;
 
-No company-cloud deployment is required. Keep credentials, state, private
-inventory and generated reports out of the public repository.
+
