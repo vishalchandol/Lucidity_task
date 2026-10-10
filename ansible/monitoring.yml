@@ -1,0 +1,335 @@
+---
+- name: Validate explicit single-account Linux scope
+  hosts: localhost
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+  vars_files: [settings.yml]
+  vars:
+    diskmon_inventory_settings: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/inventory.aws_ec2.yml') | from_yaml }}"
+  tasks:
+    - name: Require an explicit monitoring action and configured inputs
+      ansible.builtin.assert:
+        that:
+          - monitoring_action | default('choose-action') in ['configure', 'alarms', 'audit']
+          - ansible_version.full is version('2.19', '>=')
+          - ansible_version.full is version('2.20', '<')
+          - groups.get('linux', []) | length > 0
+          - workload_account_id is string
+          - workload_account_id is match('^[0-9]{12}$')
+          - diskmon_runtime_role_arn is match('^arn:aws:iam::' ~ workload_account_id ~ ':role/[A-Za-z0-9_+=,.@/-]+$')
+          - ansible_aws_ssm_profile | length > 0
+          - ansible_aws_ssm_bucket_name != 'replace-me'
+          - ansible_aws_ssm_bucket_name is match('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$')
+          - ansible_aws_ssm_document == 'AWS-StartInteractiveCommand'
+          - diskmon_inventory_settings.profile == ansible_aws_ssm_profile
+          - diskmon_inventory_settings.regions == [aws_region]
+          - diskmon_metric_namespace == 'Enterprise/DiskMonitoring'
+          - diskmon_warning_threshold | float >= 0
+          - diskmon_warning_threshold | float < diskmon_critical_threshold | float
+          - diskmon_critical_threshold | float <= 100
+        fail_msg: Choose configure, alarms or audit; configure the role, account, bucket and matching inventory profile/Region.
+
+    - name: Refuse merged or inconsistent host identities
+      ansible.builtin.assert:
+        that:
+          - hostvars[diskmon_host].instance_id | default('') is match('^i-([0-9a-f]{8}|[0-9a-f]{17})$')
+          - diskmon_host == hostvars[diskmon_host].instance_id
+          - hostvars[diskmon_host].ansible_host == hostvars[diskmon_host].instance_id
+          - hostvars[diskmon_host].placement.region == aws_region
+          - hostvars[diskmon_host].state.name == 'running'
+          - hostvars[diskmon_host].platform | default('') != 'windows'
+        fail_msg: Use the supplied running-instance inventory for one account and Region.
+      loop: "{{ groups['linux'] }}"
+      loop_control:
+        loop_var: diskmon_host
+
+    - name: Verify the runtime profile identity before monitoring AWS operations
+      ansible.builtin.command:
+        argv: [aws, sts, get-caller-identity, --profile, "{{ ansible_aws_ssm_profile }}", --region, "{{ aws_region }}", --output, json, --no-cli-pager]
+      register: diskmon_identity
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Refuse another account or runtime role
+      ansible.builtin.assert:
+        that:
+          - (diskmon_identity.stdout | from_json).Account == workload_account_id
+          - (diskmon_identity.stdout | from_json).Arn is match('^arn:aws:sts::' ~ workload_account_id ~ ':assumed-role/' ~ (diskmon_runtime_role_arn.split('/')[-1] | regex_escape) ~ '/')
+        fail_msg: The named profile must assume the declared workload runtime role.
+      when: not ansible_check_mode
+
+- name: Configure the agent or collect Linux mount facts
+  hosts: linux
+  gather_facts: false
+  become: false
+  serial: 25
+  vars_files: [settings.yml]
+  tasks:
+    - name: Configure the CloudWatch Agent on Amazon Linux 2023
+      when: monitoring_action | default('choose-action') == 'configure'
+      become: true
+      block:
+        - name: Wait for the SSM connection
+          ansible.builtin.wait_for_connection:
+            timeout: 120
+
+        - name: Gather Linux facts once
+          ansible.builtin.setup:
+
+        - name: Guard the supported agent installation platform
+          ansible.builtin.assert:
+            that:
+              - ansible_facts.distribution == 'Amazon'
+              - ansible_facts.distribution_major_version == '2023'
+              - ansible_facts.architecture in ['x86_64', 'aarch64']
+            fail_msg: Configuration supports only Amazon Linux 2023 on x86_64 or aarch64.
+
+        - name: Install the repository CloudWatch Agent package
+          ansible.builtin.package:
+            name: amazon-cloudwatch-agent
+            state: present
+          notify: Activate disk monitoring configuration
+
+        - name: Ensure the agent configuration directory exists
+          ansible.builtin.file:
+            path: "{{ diskmon_agent_config_path | dirname }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Write the disk and heartbeat configuration as JSON
+          ansible.builtin.copy:
+            content: "{{ diskmon_agent_configuration | to_nice_json }}\n"
+            dest: "{{ diskmon_agent_config_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+          notify: Activate disk monitoring configuration
+
+        - name: Apply initial configuration before starting the service
+          ansible.builtin.meta: flush_handlers
+
+        - name: Keep the CloudWatch Agent enabled and running
+          ansible.builtin.service:
+            name: amazon-cloudwatch-agent
+            enabled: true
+            state: started
+
+    - name: Audit Linux mounts without dropping failed hosts
+      when: monitoring_action | default('choose-action') == 'audit'
+      block:
+        - name: Gather only mount facts over SSM
+          ansible.builtin.setup:
+            gather_subset: ['!all', '!min', mounts]
+          register: diskmon_mount_result
+          ignore_unreachable: true
+          ignore_errors: true
+
+        - name: Normalize collection results for the standalone reporter
+          vars:
+            diskmon_real_mounts: >-
+              {{ diskmon_mount_result.ansible_facts.ansible_mounts | default([])
+                 | rejectattr('fstype', 'in', diskmon_excluded_fstypes)
+                 | selectattr('size_total', 'defined')
+                 | selectattr('size_total', 'gt', 0) | list }}
+            diskmon_audit_status: >-
+              {{ 'unreachable' if diskmon_mount_result.unreachable | default(false)
+                 else ('ok' if not (diskmon_mount_result.failed | default(false))
+                       and diskmon_real_mounts | length > 0 else 'error') }}
+          ansible.builtin.set_fact:
+            diskmon_record:
+              account_id: "{{ workload_account_id }}"
+              region: "{{ ansible_aws_ssm_region }}"
+              instance_id: "{{ instance_id }}"
+              owner: "{{ (ec2_tags | default({})).get('Owner', 'unassigned') }}"
+              status: "{{ diskmon_audit_status }}"
+              mounts: "{{ diskmon_real_mounts if diskmon_audit_status == 'ok' else [] }}"
+              error: "{{ '' if diskmon_audit_status == 'ok' else ('SSM connection unreachable' if diskmon_audit_status == 'unreachable' else 'Mount collection failed or returned no real mounts') }}"
+  handlers:
+    - name: Activate disk monitoring configuration
+      become: true
+      ansible.builtin.command:
+        argv: ["{{ diskmon_agent_ctl_path }}", -a, fetch-config, -m, ec2, -c, "file:{{ diskmon_agent_config_path }}", -s]
+      changed_when: true
+      when: monitoring_action | default('choose-action') == 'configure'
+
+- name: Manage workload-local disk and heartbeat alarms from the controller
+  hosts: localhost
+  gather_facts: false
+  become: false
+  vars_files: [settings.yml]
+  vars:
+    diskmon_active_instance_ids: "{{ groups.get('linux', []) | map('extract', hostvars, 'instance_id') | list }}"
+    diskmon_severities:
+      - name: warning
+        threshold: "{{ diskmon_warning_threshold }}"
+      - name: critical
+        threshold: "{{ diskmon_critical_threshold }}"
+  tasks:
+    - name: Reconcile alarms only for the selected action
+      when:
+        - monitoring_action | default('choose-action') == 'alarms'
+        - not ansible_check_mode
+      block:
+        - name: Require a workload-local SNS topic
+          ansible.builtin.assert:
+            that:
+              - diskmon_alarm_topic_arn is match('^arn:aws:sns:' ~ aws_region ~ ':' ~ workload_account_id ~ ':[A-Za-z0-9_-]+$')
+            fail_msg: Set diskmon_alarm_topic_arn to the workload alarm_topic_arn output.
+
+        - name: Reconcile missing-agent heartbeat alarms
+          amazon.aws.cloudwatch_metric_alarm:
+            state: present
+            profile: "{{ ansible_aws_ssm_profile }}"
+            region: "{{ aws_region }}"
+            name: "diskmon-{{ diskmon_instance_id }}-heartbeat"
+            namespace: "{{ diskmon_metric_namespace }}"
+            metric_name: mem_used_percent
+            dimensions: {InstanceId: "{{ diskmon_instance_id }}"}
+            statistic: Maximum
+            comparison: LessThanThreshold
+            threshold: 0
+            period: 60
+            evaluation_periods: 5
+            datapoints_to_alarm: 3
+            treat_missing_data: breaching
+            alarm_actions: ["{{ diskmon_alarm_topic_arn }}"]
+            ok_actions: ["{{ diskmon_alarm_topic_arn }}"]
+            insufficient_data_actions: ["{{ diskmon_alarm_topic_arn }}"]
+            description: Missing CloudWatch Agent memory samples; normal nonnegative samples do not breach.
+          loop: "{{ diskmon_active_instance_ids }}"
+          loop_control: {loop_var: diskmon_instance_id}
+
+        - name: Discover disk series with automatic AWS CLI pagination
+          ansible.builtin.command:
+            argv: [aws, cloudwatch, list-metrics, --namespace, "{{ diskmon_metric_namespace }}", --metric-name, disk_used_percent, --region, "{{ aws_region }}", --profile, "{{ ansible_aws_ssm_profile }}", --output, json, --no-cli-pager]
+          register: diskmon_metric_result
+          changed_when: false
+
+        - name: Decode the metric discovery response
+          ansible.builtin.set_fact:
+            diskmon_discovered_metrics: "{{ (diskmon_metric_result.stdout | from_json).Metrics }}"
+            diskmon_target_metrics: []
+
+        - name: Validate InstanceId and the exact active-host disk dimension schema
+          vars:
+            diskmon_dimensions: "{{ diskmon_metric.Dimensions | items2dict(key_name='Name', value_name='Value') }}"
+          ansible.builtin.assert:
+            that:
+              - "'InstanceId' in diskmon_dimensions"
+              - >-
+                diskmon_dimensions.InstanceId not in diskmon_active_instance_ids
+                or (diskmon_dimensions.keys() | sort == ['InstanceId', 'fstype', 'path']
+                    and diskmon_metric.Dimensions | length == 3)
+            fail_msg: Unexpected disk dimensions; check omit_hostname, drop_device and InstanceId configuration.
+          loop: "{{ diskmon_discovered_metrics | default([]) }}"
+          loop_control: {loop_var: diskmon_metric}
+
+        - name: Retain only nonexcluded series belonging to active Linux instances
+          vars:
+            diskmon_dimensions: "{{ diskmon_metric.Dimensions | items2dict(key_name='Name', value_name='Value') }}"
+          ansible.builtin.set_fact:
+            diskmon_target_metrics: "{{ diskmon_target_metrics + [diskmon_metric] }}"
+          loop: "{{ diskmon_discovered_metrics | default([]) }}"
+          loop_control: {loop_var: diskmon_metric}
+          when:
+            - diskmon_dimensions.InstanceId in diskmon_active_instance_ids
+            - diskmon_dimensions.fstype not in diskmon_excluded_fstypes
+
+        - name: Require a discovered disk series for every active Linux instance
+          vars:
+            diskmon_covered_ids: >-
+              {{ diskmon_target_metrics | map(attribute='Dimensions')
+                 | map('items2dict', key_name='Name', value_name='Value')
+                 | map(attribute='InstanceId') | unique | list }}
+          ansible.builtin.assert:
+            that:
+              - diskmon_active_instance_ids | difference(diskmon_covered_ids) | length == 0
+            fail_msg: Disk metrics are missing for active Linux hosts. Wait at least 15 minutes after agent startup, check publication, then rerun.
+
+        - name: Reconcile warning and critical alarms for each exact series
+          vars:
+            diskmon_dimensions: "{{ alarm_pair[0].Dimensions | items2dict(key_name='Name', value_name='Value') }}"
+            diskmon_dimension_hash: "{{ (diskmon_dimensions | dict2items | sort(attribute='key') | to_json | hash('sha1'))[:12] }}"
+          amazon.aws.cloudwatch_metric_alarm:
+            state: present
+            profile: "{{ ansible_aws_ssm_profile }}"
+            region: "{{ aws_region }}"
+            name: "diskmon-{{ diskmon_dimensions.InstanceId }}-{{ diskmon_dimension_hash }}-{{ alarm_pair[1].name }}"
+            namespace: "{{ diskmon_metric_namespace }}"
+            metric_name: disk_used_percent
+            dimensions: "{{ diskmon_dimensions }}"
+            statistic: Maximum
+            comparison: GreaterThanOrEqualToThreshold
+            threshold: "{{ alarm_pair[1].threshold }}"
+            period: 60
+            evaluation_periods: 5
+            datapoints_to_alarm: 3
+            treat_missing_data: missing
+            alarm_actions: ["{{ diskmon_alarm_topic_arn }}"]
+            ok_actions: ["{{ diskmon_alarm_topic_arn }}"]
+            insufficient_data_actions: ["{{ diskmon_alarm_topic_arn }}"]
+            description: "{{ alarm_pair[1].name }} disk usage for {{ diskmon_dimensions.path }} ({{ diskmon_dimensions.fstype }})"
+          loop: "{{ diskmon_target_metrics | default([]) | product(diskmon_severities) | list }}"
+          loop_control: {loop_var: alarm_pair}
+
+- name: Assemble Linux coverage input and run the local reporter
+  hosts: localhost
+  gather_facts: false
+  become: false
+  vars_files: [settings.yml]
+  tasks:
+    - name: Aggregate reports only for the selected audit action
+      when:
+        - monitoring_action | default('choose-action') == 'audit'
+        - not ansible_check_mode
+      block:
+        - name: Initialize one UTC collection and complete host list
+          ansible.builtin.set_fact:
+            diskmon_collected_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+            diskmon_report_hosts: []
+
+        - name: Include every Linux host even without a collection record
+          vars:
+            diskmon_fallback:
+              account_id: "{{ workload_account_id }}"
+              region: "{{ hostvars[diskmon_host].ansible_aws_ssm_region | default(aws_region) }}"
+              instance_id: "{{ hostvars[diskmon_host].instance_id | default(diskmon_host) }}"
+              owner: "{{ (hostvars[diskmon_host].ec2_tags | default({})).get('Owner', 'unassigned') }}"
+              status: error
+              mounts: []
+              error: No collection record; host failed, was skipped or was not attempted
+          ansible.builtin.set_fact:
+            diskmon_report_hosts: "{{ diskmon_report_hosts + [hostvars[diskmon_host].diskmon_record | default(diskmon_fallback)] }}"
+          loop: "{{ groups['linux'] | sort }}"
+          loop_control: {loop_var: diskmon_host}
+
+        - name: Create the controller report directory
+          ansible.builtin.file:
+            path: "{{ diskmon_report_directory }}"
+            state: directory
+            mode: "0700"
+
+        - name: Write complete coverage input as JSON
+          ansible.builtin.copy:
+            dest: "{{ diskmon_report_directory }}/input.json"
+            content: "{{ {'source': 'aws-ssm', 'collected_at': diskmon_collected_at, 'hosts': diskmon_report_hosts} | to_nice_json }}\n"
+            mode: "0600"
+
+        - name: Generate reports with configured thresholds and retain findings
+          ansible.builtin.command:
+            argv: ["{{ ansible_playbook_python }}", "{{ diskmon_report_script }}", --input, "{{ diskmon_report_directory }}/input.json", --output-dir, "{{ diskmon_report_directory }}", --warning, "{{ diskmon_warning_threshold | string }}", --critical, "{{ diskmon_critical_threshold | string }}", --fail-on-findings]
+          register: diskmon_report_result
+          changed_when: false
+          failed_when: diskmon_report_result.rc not in [0, 1]
+
+        - name: Print reporter results
+          ansible.builtin.debug:
+            var: diskmon_report_result.stdout_lines
+
+        - name: Fail the audit when the reporter finds findings
+          ansible.builtin.assert:
+            that: [diskmon_report_result.rc == 0]
+            fail_msg: Audit findings are recorded in the JSON and CSV reports.

@@ -1,0 +1,58 @@
+---
+ansible_connection: "{{ 'local' if inventory_hostname == 'localhost' else 'amazon.aws.aws_ssm' }}"
+ansible_python_interpreter: "{{ ansible_playbook_python if inventory_hostname == 'localhost' else '/usr/bin/python3' }}"
+ansible_aws_ssm_profile: diskmon-workload
+ansible_aws_ssm_region: us-east-1
+ansible_aws_ssm_bucket_name: replace-me
+ansible_aws_ssm_document: AWS-StartInteractiveCommand
+ansible_aws_ssm_bucket_sse_mode: AES256
+aws_region: "{{ ansible_aws_ssm_region }}"
+workload_account_id: replace-me
+diskmon_runtime_role_arn: replace-me
+diskmon_metric_namespace: Enterprise/DiskMonitoring
+diskmon_alarm_topic_arn: replace-me
+diskmon_warning_threshold: 80
+diskmon_critical_threshold: 90
+diskmon_agent_config_path: /opt/aws/amazon-cloudwatch-agent/etc/enterprise-disk.json
+diskmon_agent_ctl_path: /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl
+diskmon_report_directory: "{{ playbook_dir }}/../reports"
+diskmon_report_script: "{{ playbook_dir }}/scripts/disk_report.py"
+diskmon_excluded_fstypes:
+  - proc
+  - sysfs
+  - devtmpfs
+  - tmpfs
+  - devpts
+  - cgroup
+  - cgroup2
+  - overlay
+  - squashfs
+  - debugfs
+  - tracefs
+  - securityfs
+  - pstore
+  - configfs
+  - mqueue
+  - hugetlbfs
+  - fusectl
+  - autofs
+  - binfmt_misc
+  - nsfs
+  - ramfs
+diskmon_agent_configuration:
+  agent:
+    omit_hostname: true
+  metrics:
+    namespace: "{{ diskmon_metric_namespace }}"
+    append_dimensions:
+      InstanceId: '${aws:InstanceId}'
+    metrics_collected:
+      disk:
+        measurement: [used_percent, free, total]
+        metrics_collection_interval: 60
+        resources: ['*']
+        drop_device: true
+        ignore_file_system_types: "{{ diskmon_excluded_fstypes }}"
+      mem:
+        measurement: [used_percent]
+        metrics_collection_interval: 60

@@ -1,0 +1,37 @@
+{
+  "source": "simulated",
+  "collected_at": "2026-10-09T12:00:00Z",
+  "hosts": [
+    {
+      "account_id": "111111111111",
+      "region": "us-east-1",
+      "instance_id": "i-00000000000000001",
+      "owner": "payments",
+      "status": "ok",
+      "mounts": [
+        {"mount": "/", "fstype": "xfs", "size_total": 107374182400, "size_available": 53687091200},
+        {"mount": "/data", "fstype": "xfs", "size_total": 107374182400, "size_available": 16106127360}
+      ]
+    },
+    {
+      "account_id": "222222222222",
+      "region": "eu-west-1",
+      "instance_id": "i-00000000000000002",
+      "owner": "analytics",
+      "status": "ok",
+      "mounts": [
+        {"mount": "/", "fstype": "ext4", "size_total": 107374182400, "size_available": 5368709120},
+        {"mount": "/run", "fstype": "tmpfs", "size_total": 104857600, "size_available": 1048576}
+      ]
+    },
+    {
+      "account_id": "222222222222",
+      "region": "eu-west-1",
+      "instance_id": "i-00000000000000003",
+      "owner": "unassigned",
+      "status": "unreachable",
+      "error": "Simulated SSM connection timeout",
+      "mounts": []
+    }
+  ]
+}

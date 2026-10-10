@@ -1,0 +1,18 @@
+---
+plugin: amazon.aws.aws_ec2
+regions:
+  - us-east-1
+profile: diskmon-workload
+filters:
+  instance-state-name: running
+strict: true
+strict_permissions: true
+cache: false
+hostnames:
+  - instance-id
+compose:
+  ansible_host: instance_id
+  ansible_aws_ssm_region: placement.region
+groups:
+  linux: (platform | default('')) != 'windows'
+  windows: (platform | default('')) == 'windows'
