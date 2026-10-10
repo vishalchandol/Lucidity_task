@@ -20,7 +20,4 @@ resources. No Terraform plan, apply or destroy was run.
 - Cross-account OAM visibility and dashboard rendering against live accounts.
 - Multi-account rollout behavior or fleet-scale limits.
 
-The Ansible playbook was not executed on a Linux/WSL controller. Static review
-does not prove Ansible runtime compatibility or guest configuration success.
-Use an approved personal sandbox to validate those behaviors before claiming a
-working AWS deployment. Do not use company AWS credentials for this submission.
+
