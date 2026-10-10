@@ -1,0 +1,1 @@
+output "name" { value = aws_cloudwatch_dashboard.disk.dashboard_name }

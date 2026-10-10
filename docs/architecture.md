@@ -6,7 +6,7 @@
 flowchart TB
 	terminal[Operator terminal - no pipeline]
 	terraform[Terraform - IAM, transfer bucket, monitoring resources]
-	ansible[Ansible controller - discover, configure, audit, create alarms]
+	ansible[Ansible controller - discover, configure and manage alarms]
 	identity[AWS SSO and STS - approved workload role]
 	terminal --> terraform
 	terminal --> ansible
@@ -26,7 +26,6 @@ flowchart TB
 	identity --> discovery
 	ansible -->|Configure agent| access
 	ansible -->|Create and update alarms| alarms
-	access -->|Collect mount facts| report[Controller - aggregate JSON and CSV reports]
 	terraform -.->|Provision supporting resources| workload
 
 	subgraph monitoring[Monitoring account - matching Region]
@@ -74,24 +73,13 @@ demo uses its local dashboard and needs neither OAM nor central forwarding.
 		end
 		CW->>SNS: 9. Notify on alarm, recovery or insufficient data
 
-		Note over Operator,VM: Separate point-in-time audit
-		Operator->>Ansible: 10. Run monitoring.yml with action audit
-		Ansible->>VM: 11. Collect filesystem facts via SSM
-		alt Collection succeeds
-			VM-->>Ansible: Mount sizes and available bytes
-		else Collection fails or host is unreachable
-			Ansible->>Ansible: Preserve expected host as NO_DATA
-		end
-		Ansible->>Ansible: 12. Aggregate every expected Linux host into JSON and CSV
-		Ansible-->>Operator: 13. Report and nonzero exit when findings exist
 ```
 
 ### Numbered Walkthrough
 
-These numbers match the main actions in the sequence diagram. They describe
-three separate activities, not one long-running playbook: enrollment (1-3),
-continuous monitoring and alarm setup (4-9), and an on-demand audit (10-13).
-Step 9 occurs on a relevant alarm state transition, not on every playbook run.
+These numbers match the main actions in the sequence diagram: enrollment (1-3)
+followed by continuous metric collection and alarm setup (4-9). Step 9 occurs
+when an alarm changes state, not on every playbook run.
 
 1. **Start enrollment:** Select the approved account/Region and run `monitoring.yml -e monitoring_action=configure` with its named role profile. Supporting infrastructure must already exist.
 2. **Discover and validate:** Dynamic inventory finds running VMs; preflight checks the account identity, profile, Region and Linux scope. Failed checks stop the run.
@@ -102,48 +90,36 @@ Step 9 occurs on a relevant alarm state transition, not on every playbook run.
 7. **Discover disk metrics:** Read published disk series and validate their exact instance/mount dimensions. Discovery alone does not prove freshness.
 8. **Create disk alarms:** If every expected VM has a discovered series, create/update warning and critical alarms. Otherwise fail disk reconciliation while retaining heartbeat alarms.
 9. **Notify operators:** CloudWatch sends alarm, recovery or insufficient-data notifications through SNS. Subscriptions must be configured and confirmed.
-10. **Start an audit:** Run `monitoring.yml -e monitoring_action=audit` when a point-in-time disk and coverage report is needed.
-11. **Gather filesystem facts:** Read mount sizes and available space through SSM. Failed or unreachable hosts remain in the report as NO_DATA.
-12. **Aggregate results:** Combine every expected Linux host into controller-side JSON and CSV reports, retaining both successful and failed collection results.
-13. **Review findings:** Return the reports and a nonzero audit exit when warning, critical or no-data findings exist; assign remediation to the workload owner.
-
 The architecture diagram shows **what is connected and where it lives**. This
 sequence diagram shows **who performs each action and in what order**. Repeat
 discovery, configuration and alarm reconciliation to enroll new accounts or VMs.
 
-The three paths are distinct: agent metrics run continuously, alarm reconciliation
-is an Ansible run, and the audit produces a point-in-time report. Connection or
-collection failures produce NO_DATA rather than healthy-looking empty results.
-Failed preflight stops the run. Unsupported platforms fail enrollment explicitly.
-No deployment occurs merely by cloning the repository or running the fixture demo.
+Metrics continue after agent setup, independent of controller availability.
+Alarm reconciliation is a separate Ansible run. Missing agent samples trigger
+the heartbeat alarm. Failed preflight stops the run, and unsupported platforms
+fail enrollment explicitly. Cloning the repository does not deploy resources.
 
-## Deliverable Scope
+## Components And Responsibilities
 
-1. Architecture: the two diagrams above.
-2. Minimal working artifacts: Ansible inventory and one monitoring playbook,
-   the reporter and fixture tests, and supporting Terraform access resources.
-3. Component summary: secure access, VM discovery/enrollment, centralized reporting,
-   and repeatable account/Region onboarding in the README and operating guide.
+- **Terraform** provisions access roles, transfer storage, alarm topics,
+	dashboards, and optional cross-account integrations.
+- **Ansible** discovers EC2 instances, configures CloudWatch Agent, and creates
+	or updates workload-local CloudWatch alarms.
+- **CloudWatch Agent** publishes guest filesystem metrics every 60 seconds.
+- **CloudWatch** stores and presents metrics, evaluates alarms, and supports
+	account/Region dashboard views. OAM provides regional cross-account visibility;
+	it does not copy metric data.
+- **SNS** receives alarm state notifications. A human notification requires a
+	separately configured and confirmed subscription.
 
-No pipeline, Lambda reconciler, custom monitoring platform or Windows collection
-is required for this submission. Existing advanced options remain documented
-extensions, not additional implementation work.
+## Assignment Coverage
 
-Terraform owns infrastructure. Ansible owns guest configuration and dynamic
-alarms. Agents publish independently of controller availability; a controller
-outage delays enrollment/auditing, not metrics from already-configured VMs.
-
-## Minimal Working Demonstration
-
-Use the numbered walkthrough above for the live-cloud execution path. The
-credential-free fixture demo exercises steps 12-13 using simulated input rather
-than collecting from real VMs. Regional OAM visibility and optional central
-forwarding are infrastructure integrations shown in the architecture diagram,
-not additional steps in each audit run.
-
-An agent avoids repeated remote polling as the primary alert mechanism. Ansible
-facts provide a simple, reviewable audit and minimum collection/aggregation demo.
-The offline fixture exercises aggregation, not real guest collection or AWS APIs.
+1. **Access management:** SSO/STS, dedicated workload roles, and SSM access are
+	 configured in Terraform and used by Ansible.
+2. **Collection and presentation:** The agent publishes filesystem metrics;
+	 CloudWatch dashboards and alarms provide aggregation and monitoring.
+3. **Scalability:** Dynamic EC2 inventory and repeatable per-account/Region runs
+	 support growth without a manually maintained VM list.
 
 ## Measurement Contract
 
@@ -152,12 +128,6 @@ Dimensions: `InstanceId`, `path`, `fstype`. `drop_device` and `omit_hostname`
 prevent additional identity dimensions. Alarm reconciliation refuses unexpected
 dimension sets, avoiding silent alarms on nonexistent series.
 
-The audit uses available bytes from Ansible facts to calculate space unavailable
-to applications. Reserved filesystem blocks can make this differ from the
-agent's utilization calculation. It is an independent operational audit, not a
-claim of byte-for-byte parity with CloudWatch. Audit collection time is one fleet
-timestamp, not a continuous freshness guarantee.
-
 The heartbeat uses `mem_used_percent` with `InstanceId`: normal values cannot
 breach a negative threshold, but missing samples are treated as breaching.
 CloudWatch evaluation/backfill affects timing; this is not an exact outage timer.
@@ -165,9 +135,9 @@ An alive heartbeat does not prove every expected mount is still reporting.
 
 ## Scope and Extensions
 
-Implemented: AL2023 installation, Linux mount auditing, dynamic running-instance
-inventory, workload-local alarms, regional OAM visibility, central forwarding,
-and standalone reporting with synthetic fixtures.
+Included in the proposed artifacts: AL2023 agent configuration, dynamic
+running-instance inventory, workload-local alarms, CloudWatch dashboards,
+regional OAM visibility and optional central event forwarding.
 
 Designed extensions: other Linux distributions, Windows per-drive collection,
 inode/absolute-space alarms, event-driven enrollment, scheduled freshness and

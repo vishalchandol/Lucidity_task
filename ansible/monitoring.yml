@@ -11,7 +11,7 @@
     - name: Require an explicit monitoring action and configured inputs
       ansible.builtin.assert:
         that:
-          - monitoring_action | default('choose-action') in ['configure', 'alarms', 'audit']
+          - monitoring_action | default('choose-action') in ['configure', 'alarms']
           - ansible_version.full is version('2.19', '>=')
           - ansible_version.full is version('2.20', '<')
           - groups.get('linux', []) | length > 0
@@ -28,7 +28,7 @@
           - diskmon_warning_threshold | float >= 0
           - diskmon_warning_threshold | float < diskmon_critical_threshold | float
           - diskmon_critical_threshold | float <= 100
-        fail_msg: Choose configure, alarms or audit; configure the role, account, bucket and matching inventory profile/Region.
+        fail_msg: Choose configure or alarms; configure the role, account, bucket and matching inventory profile/Region.
 
     - name: Refuse merged or inconsistent host identities
       ansible.builtin.assert:
@@ -59,7 +59,7 @@
         fail_msg: The named profile must assume the declared workload runtime role.
       when: not ansible_check_mode
 
-- name: Configure the agent or collect Linux mount facts
+- name: Configure the CloudWatch Agent on Linux VMs
   hosts: linux
   gather_facts: false
   become: false
@@ -117,36 +117,6 @@
             enabled: true
             state: started
 
-    - name: Audit Linux mounts without dropping failed hosts
-      when: monitoring_action | default('choose-action') == 'audit'
-      block:
-        - name: Gather only mount facts over SSM
-          ansible.builtin.setup:
-            gather_subset: ['!all', '!min', mounts]
-          register: diskmon_mount_result
-          ignore_unreachable: true
-          ignore_errors: true
-
-        - name: Normalize collection results for the standalone reporter
-          vars:
-            diskmon_real_mounts: >-
-              {{ diskmon_mount_result.ansible_facts.ansible_mounts | default([])
-                 | rejectattr('fstype', 'in', diskmon_excluded_fstypes)
-                 | selectattr('size_total', 'defined')
-                 | selectattr('size_total', 'gt', 0) | list }}
-            diskmon_audit_status: >-
-              {{ 'unreachable' if diskmon_mount_result.unreachable | default(false)
-                 else ('ok' if not (diskmon_mount_result.failed | default(false))
-                       and diskmon_real_mounts | length > 0 else 'error') }}
-          ansible.builtin.set_fact:
-            diskmon_record:
-              account_id: "{{ workload_account_id }}"
-              region: "{{ ansible_aws_ssm_region }}"
-              instance_id: "{{ instance_id }}"
-              owner: "{{ (ec2_tags | default({})).get('Owner', 'unassigned') }}"
-              status: "{{ diskmon_audit_status }}"
-              mounts: "{{ diskmon_real_mounts if diskmon_audit_status == 'ok' else [] }}"
-              error: "{{ '' if diskmon_audit_status == 'ok' else ('SSM connection unreachable' if diskmon_audit_status == 'unreachable' else 'Mount collection failed or returned no real mounts') }}"
   handlers:
     - name: Activate disk monitoring configuration
       become: true
@@ -274,62 +244,3 @@
             description: "{{ alarm_pair[1].name }} disk usage for {{ diskmon_dimensions.path }} ({{ diskmon_dimensions.fstype }})"
           loop: "{{ diskmon_target_metrics | default([]) | product(diskmon_severities) | list }}"
           loop_control: {loop_var: alarm_pair}
-
-- name: Assemble Linux coverage input and run the local reporter
-  hosts: localhost
-  gather_facts: false
-  become: false
-  vars_files: [settings.yml]
-  tasks:
-    - name: Aggregate reports only for the selected audit action
-      when:
-        - monitoring_action | default('choose-action') == 'audit'
-        - not ansible_check_mode
-      block:
-        - name: Initialize one UTC collection and complete host list
-          ansible.builtin.set_fact:
-            diskmon_collected_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
-            diskmon_report_hosts: []
-
-        - name: Include every Linux host even without a collection record
-          vars:
-            diskmon_fallback:
-              account_id: "{{ workload_account_id }}"
-              region: "{{ hostvars[diskmon_host].ansible_aws_ssm_region | default(aws_region) }}"
-              instance_id: "{{ hostvars[diskmon_host].instance_id | default(diskmon_host) }}"
-              owner: "{{ (hostvars[diskmon_host].ec2_tags | default({})).get('Owner', 'unassigned') }}"
-              status: error
-              mounts: []
-              error: No collection record; host failed, was skipped or was not attempted
-          ansible.builtin.set_fact:
-            diskmon_report_hosts: "{{ diskmon_report_hosts + [hostvars[diskmon_host].diskmon_record | default(diskmon_fallback)] }}"
-          loop: "{{ groups['linux'] | sort }}"
-          loop_control: {loop_var: diskmon_host}
-
-        - name: Create the controller report directory
-          ansible.builtin.file:
-            path: "{{ diskmon_report_directory }}"
-            state: directory
-            mode: "0700"
-
-        - name: Write complete coverage input as JSON
-          ansible.builtin.copy:
-            dest: "{{ diskmon_report_directory }}/input.json"
-            content: "{{ {'source': 'aws-ssm', 'collected_at': diskmon_collected_at, 'hosts': diskmon_report_hosts} | to_nice_json }}\n"
-            mode: "0600"
-
-        - name: Generate reports with configured thresholds and retain findings
-          ansible.builtin.command:
-            argv: ["{{ ansible_playbook_python }}", "{{ diskmon_report_script }}", --input, "{{ diskmon_report_directory }}/input.json", --output-dir, "{{ diskmon_report_directory }}", --warning, "{{ diskmon_warning_threshold | string }}", --critical, "{{ diskmon_critical_threshold | string }}", --fail-on-findings]
-          register: diskmon_report_result
-          changed_when: false
-          failed_when: diskmon_report_result.rc not in [0, 1]
-
-        - name: Print reporter results
-          ansible.builtin.debug:
-            var: diskmon_report_result.stdout_lines
-
-        - name: Fail the audit when the reporter finds findings
-          ansible.builtin.assert:
-            that: [diskmon_report_result.rc == 0]
-            fail_msg: Audit findings are recorded in the JSON and CSV reports.

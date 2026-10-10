@@ -14,14 +14,13 @@ VM remains a coverage gap until an owner approves its enrollment or exemption.
 The workflow does not bootstrap SSM or replace existing instance profiles blindly.
 
 Run separate jobs and state boundaries for each account/Region. Do not merge
-instance-ID inventory sources. Use distinct report directories and profiles;
-do not execute several writers against the same report path.
+instance-ID inventory sources. Use the approved named profile for each run.
 
 ## Repeatable Enrollment
 
-Run `monitoring.yml` with `monitoring_action=configure`, then `alarms`, then
-`audit` after discovery. Each action is selected explicitly on a separate run.
-Configuration uses batches of 25, bounded controller forks and repeatable tasks.
+Run `monitoring.yml` with `monitoring_action=configure`, then `alarms` after
+discovery. Each action is selected explicitly on a separate run. Configuration
+uses batches of 25, bounded controller forks and repeatable tasks.
 Continuous agent publication is distributed across VMs, independent of these jobs.
 Configuration retries are bounded; unreachable hosts are visible for remediation.
 
@@ -31,8 +30,8 @@ or stale, so it does not establish freshness or a complete expected-mount list.
 Keep an application-owned mount registry for stronger production coverage.
 
 In enterprise operation, schedule per-account/Region runs using existing Ansible
-controller capabilities. Record expected hosts, successful enrollment and failed
-hosts each run; alert on controller job failure. No scheduler is installed here.
+controller capabilities. Review discovered hosts and failed connections after
+each run; alert on controller job failure. No scheduler is installed here.
 Shard the job queue, avoid overlapping jobs for one fleet, retry throttling with
 backoff, and keep account failures isolated from other accounts.
 
@@ -44,7 +43,6 @@ backoff, and keep account failures isolated from other accounts.
 | Disk critical | >=90%, Maximum, 3 of 5 one-minute periods |
 | Missing disk series | `missing` treatment plus insufficient-data SNS action |
 | Missing agent samples | Heartbeat alarm, missing treated as breaching |
-| Audit failure | NO_DATA row, reduced coverage and nonzero audit exit |
 
 Both warning and critical can fire together. Confirm local and/or central SNS
 subscriptions before relying on notifications. Avoid subscribing the same person
@@ -65,5 +63,6 @@ The runtime role deliberately lacks alarm deletion permission.
 
 Review CloudWatch series/alarms and dashboard SEARCH limits, SSM sessions, STS
 and API quotas, and OAM account/link limits before expansion. A SEARCH dashboard
-is for active series, not proof that every VM was enrolled. Missing data needs
-coverage reports and a production freshness reconciler, not a green-looking chart.
+is for active metric series, not a full inventory. The per-instance heartbeat
+alarms provide the basic missing-agent signal; a separate audit report is not
+part of this solution.

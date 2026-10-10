@@ -1,14 +1,10 @@
 # Terminal-Only Runbook
 
-## Local Checks: No AWS Account Needed
+## Local Checks: No AWS Resources Needed
 
-Use Python >=3.11 for reporting and local tests. On Windows PowerShell:
+From PowerShell at the repository root:
 
 ```powershell
-py -m venv .venv
-& .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-& .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-& .\.venv\Scripts\python.exe ansible/scripts/disk_report.py --input tests/fixtures/fleet.json --output-dir reports/demo
 terraform fmt -check -recursive terraform
 terraform -chdir=terraform/environments/demo init -backend=false -input=false
 terraform -chdir=terraform/environments/demo validate
@@ -19,7 +15,6 @@ terraform -chdir=terraform/environments/workload validate
 ```
 
 Provider/package downloads need internet; these commands do not provision AWS.
-Local tests parse YAML and check rendered configuration, but are not Ansible execution.
 
 On a prepared Linux controller, use [Ansible prerequisites](../ansible/README.md):
 
@@ -38,9 +33,10 @@ These are instructions, not authorization or commands executed here. Agree the
 account, Region, resources and budget before testing. Never target company AWS.
 
 1. Prepare a deployment SSO profile and an existing tooling identity allowed to
-   assume the runtime role. Review the Terraform examples and least-privilege
+   assume the runtime role. Review the Terraform variables and least-privilege
    deployment rights independently; no broad deploy policy is generated.
-2. Copy the demo variable example to ignored `terraform.tfvars`. Set the approved
+2. Create a local, ignored `terraform.tfvars` file in the selected environment
+   directory, using its `variables.tf` as the input reference. Set the approved
    account/Region, tooling ARN, globally unique bucket and deployment profile.
    Optional EC2 creation is off by default; enable only with approved private
    subnet/security groups and working HTTPS service/package access.
@@ -53,8 +49,8 @@ account, Region, resources and budget before testing. Never target company AWS.
    profile. Populate matching inventory/group vars, transfer bucket and SNS ARN.
    Keep secrets outside the repository. Attach returned instance policies to
    an existing guest role only after reviewing its application permissions.
-6. Confirm an SNS subscription, then run the configure, alarm and audit commands
-   in the Ansible guide. Wait for published metrics before disk reconciliation.
+6. Confirm an SNS subscription, then run the configure and alarm commands in the
+   Ansible guide. Wait for published metrics before disk reconciliation.
    Heartbeat alarms can enter ALARM before samples start; treat boot grace periods
    as an operating consideration, not an implemented suppression feature.
 7. Verify agent configuration twice, actual dimensions, metrics, safe threshold

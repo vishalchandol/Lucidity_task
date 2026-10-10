@@ -15,8 +15,6 @@ diskmon_warning_threshold: 80
 diskmon_critical_threshold: 90
 diskmon_agent_config_path: /opt/aws/amazon-cloudwatch-agent/etc/enterprise-disk.json
 diskmon_agent_ctl_path: /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl
-diskmon_report_directory: "{{ playbook_dir }}/../reports"
-diskmon_report_script: "{{ playbook_dir }}/scripts/disk_report.py"
 diskmon_excluded_fstypes:
   - proc
   - sysfs

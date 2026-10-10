@@ -1,8 +1,8 @@
 # Linux Disk Monitoring
 
-[monitoring.yml](monitoring.yml) has four plays: preflight, Linux configuration or
-mount collection, controller alarms, and controller audit aggregation. Every play
-loads [settings.yml](settings.yml). Only the explicitly selected action runs;
+[monitoring.yml](monitoring.yml) has three plays: preflight, Linux agent
+configuration, and controller-side alarms. Every play loads [settings.yml](settings.yml).
+Only the explicitly selected action runs;
 omitting `monitoring_action` or using another value fails preflight.
 
 ## Controller And Settings
@@ -45,11 +45,10 @@ Run from the repository root after configuring the profile and settings:
 ```bash
 ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/monitoring.yml -e monitoring_action=configure
 ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/monitoring.yml -e monitoring_action=alarms
-ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/monitoring.yml -e monitoring_action=audit
 ```
 
 Inventory discovers all running instances, including untagged hosts. Windows stays
-visible in its own group but is not configured or audited. Instance IDs are SSM
+visible in its own group but are not configured. Instance IDs are SSM
 targets. Do not merge accounts/Regions, exclude localhost, or bypass preflight with
 `--limit`, tags or task selection. Inventory discovery precedes preflight; subsequent
 AWS operations require STS to match the declared account and assumed runtime role.
@@ -67,21 +66,14 @@ with missing disk data `missing`. Heartbeats use < 0 and missing data `breaching
 Wait at least 15 minutes after initial configuration for disk discovery. Every
 active Linux host needs a disk series. Discovery is not a freshness or mount check.
 SNS notifications need confirmed subscriptions. Retired alarms are not deleted.
+CloudWatch dashboards aggregate published filesystem metrics by account and
+Region. The heartbeat alarm identifies VMs whose agent has stopped publishing.
 
-`audit` gathers only mount facts without the AL2023 installation restriction.
-Failed, unreachable and unattempted hosts remain in the full Linux coverage input.
-[scripts/disk_report.py](scripts/disk_report.py) is invoked with the controller
-Python and configured thresholds. Output defaults to `reports/input.json`,
-`reports/disk-report.json` and `reports/disk-report.csv`; paths are relative to the
-playbook, not the working directory. Results are printed before findings fail the
-audit (reporter exit 1). Use separate report directories and avoid concurrent writers.
+## Syntax Validation
 
-## Offline Validation
-
-Run `python -B -m unittest discover -s tests -v` for parsing/rendering and reporter
-tests. On Linux/WSL, use `ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i
-'localhost,' ansible/monitoring.yml --syntax-check` for offline native syntax checks.
-Do not use the AWS inventory for offline checks: even `--syntax-check` discovers
-instances. `--check` skips STS, alarm operations and reporting, but AWS inventory
-still performs discovery. Local checks do not prove live IAM, SSM, idempotence,
-published metrics or notification delivery. No deployment is implied.
+On Linux/WSL, use
+`ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i 'localhost,' ansible/monitoring.yml --syntax-check`
+for an Ansible syntax check. Do not use the AWS inventory for offline checks:
+even `--syntax-check` discovers instances. `--check` still loads AWS inventory.
+Syntax checks do not prove live IAM, SSM, idempotence, published metrics,
+dashboard rendering or notification delivery. No deployment is implied.

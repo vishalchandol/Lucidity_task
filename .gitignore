@@ -12,8 +12,11 @@ __pycache__/
 *.auto.tfvars
 crash.log
 reports/
+docs/architecture.docx
+docs/architecture-mvp.docx
 ansible/inventory/local/
 .env
 *.pem
 *.key
 credentials
+requirements-dev.txt

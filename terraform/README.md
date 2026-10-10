@@ -1,8 +1,9 @@
 # Terraform: AWS Disk Monitoring Support
 
 Terraform supplies IAM, transfer storage, SNS, dashboards and optional cross-account
-visibility/routing. Ansible configures agents, manages disk/heartbeat alarms and
-produces reports. This undeployed example has no pipeline, scheduler or Lambda.
+visibility/routing. Ansible configures agents and manages disk/heartbeat alarms.
+CloudWatch aggregates and presents the metrics. This undeployed example has no
+pipeline, scheduler or Lambda.
 
 ## Roots And Modules
 
@@ -33,8 +34,10 @@ protected state per account/Region and reviewed provisioning permissions.
 | Monitoring | Nonempty `source_account_ids`, explicit approved accounts distinct from the monitoring account. |
 | Workload | `tooling_role_arn`, globally unique `transfer_bucket_name`; `session_instance_tags = { Monitoring = "enabled" }`; `monitoring_sink_arn = null`, `central_event_bus_arn = null`. |
 
-The sanitized `terraform.tfvars.example` files contain fictional accounts, not credentials.
-Deployment and runtime identities are distinct: existing tooling assumes `runtime_role_arn`,
+No `terraform.tfvars` file is included. Create a local ignored variable file from
+the root's `variables.tf` when preparing an approved deployment; never put
+credentials or real account details in the public example. Deployment and runtime
+identities are distinct: existing tooling assumes `runtime_role_arn`,
 not for provisioning. Trust names `tooling_role_arn`, not an account root. Terraform
 does not create local profiles, inventory settings or notification subscriptions.
 
