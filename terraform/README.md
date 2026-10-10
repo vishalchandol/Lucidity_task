@@ -139,5 +139,5 @@ terraform -chdir=terraform/environments/workload validate -no-color
 ```
 
 These check local dependencies/schemas, not AWS resources; no plan/apply/destroy is needed.
-See the [overview](../README.md), [terminal runbook](../docs/terminal-runbook.md),
-[operations](../docs/operations.md), [security and cost](../docs/security-and-cost.md) and [validation](../docs/validation.md).
+See the [overview](../README.md), [Ansible guide](../ansible/README.md),
+[operations](../docs/operations.md) and [validation](../docs/validation.md).

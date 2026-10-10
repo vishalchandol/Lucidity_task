@@ -24,10 +24,10 @@ questions, see [Direct Answers to the Assignment](docs/solution-answers.md).
 | Deliverable | Files |
 | --- | --- |
 | High-level architecture | [Architecture and flow diagrams](docs/architecture.md) |
-| Collection and alarms | [Monitoring playbook](ansible/monitoring.yml) configures the agent and alarms |
+| Collection and alarms | [Agent configuration](ansible/configure-agent.yml) and [alarm management](ansible/alarms.yml) |
 | Aggregation and presentation | CloudWatch metrics and [account-level dashboards](terraform/modules/dashboard/main.tf) |
 | Access management | [Workload IAM resources](terraform/modules/workload/main.tf) and [connection settings](ansible/settings.yml) |
-| VM discovery and enrollment | [EC2 inventory](ansible/inventory.aws_ec2.yml), with configure and alarms actions in the monitoring playbook |
+| VM discovery and enrollment | [EC2 inventory](ansible/inventory.aws_ec2.yml), with both playbooks using shared [preflight checks](ansible/preflight.yml) |
 | Scaling to more accounts and VMs | [Account onboarding and operations](docs/operations.md) |
 
 ## How It Works
@@ -50,19 +50,27 @@ questions, see [Direct Answers to the Assignment](docs/solution-answers.md).
 
 ## Run And Validate
 
-For AWS use, [one Ansible playbook](ansible/monitoring.yml) provides explicit
-`configure` and `alarms` actions. See [the Ansible guide](ansible/README.md) for
-Linux/WSL controller setup and [the terminal runbook](docs/terminal-runbook.md)
-for Terraform formatting and validation commands. These local Terraform checks
-do not create AWS resources. Sandbox testing is optional and must use an approved
-personal account, never company AWS.
+For AWS use, run [the configuration playbook](ansible/configure-agent.yml), then
+[the alarms playbook](ansible/alarms.yml). Both use the shared preflight checks.
+See the [Ansible guide](ansible/README.md) for Linux/WSL controller setup and the
+[Terraform guide](terraform/README.md) for formatting and validation commands.
+These local Terraform checks do not create AWS resources. Sandbox testing is
+optional and must use an approved personal account, never company AWS.
 
 ## Setup and Limitations
 
- [Local and AWS validation status](docs/validation.md).
+- [Ansible prerequisites and commands](ansible/README.md)
+- [Terraform roots and validation](terraform/README.md)
+- [Account onboarding and operations](docs/operations.md)
+- [Local and AWS validation status](docs/validation.md)
 
 Agent installation currently targets Amazon Linux 2023; Windows VMs are discovered
-but not configured. Ansible needs a Linux/WSL controller. Terraform validation
-has passed locally;
+but not configured. Ansible needs a Linux/WSL controller. Terraform formatting,
+initialization without a backend, and validation have passed locally. SSM access,
+agent publication, alarm notifications and cross-account visibility have not
+been tested in AWS. No resources are deployed by cloning or validating this repository.
+
+Keep credentials, private account variables, Terraform state, plans, generated
+reports and personal study material out of the public repository.
 
 

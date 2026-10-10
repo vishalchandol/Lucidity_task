@@ -20,7 +20,8 @@ On a prepared Linux controller, use [Ansible prerequisites](../ansible/README.md
 
 ```bash
 export ANSIBLE_CONFIG=ansible/ansible.cfg
-ansible-playbook -i localhost, ansible/monitoring.yml --syntax-check
+ansible-playbook -i localhost, ansible/configure-agent.yml --syntax-check
+ansible-playbook -i localhost, ansible/alarms.yml --syntax-check
 ```
 
 Do **not** use dynamic AWS inventory for offline checks: inventory parsing makes
@@ -49,8 +50,9 @@ account, Region, resources and budget before testing. Never target company AWS.
    profile. Populate matching inventory/group vars, transfer bucket and SNS ARN.
    Keep secrets outside the repository. Attach returned instance policies to
    an existing guest role only after reviewing its application permissions.
-6. Confirm an SNS subscription, then run the configure and alarm commands in the
-   Ansible guide. Wait for published metrics before disk reconciliation.
+6. Confirm an SNS subscription, then run `configure-agent.yml` followed by
+   `alarms.yml` as shown in the Ansible guide. Wait for published metrics before
+   disk reconciliation.
    Heartbeat alarms can enter ALARM before samples start; treat boot grace periods
    as an operating consideration, not an implemented suppression feature.
 7. Verify agent configuration twice, actual dimensions, metrics, safe threshold

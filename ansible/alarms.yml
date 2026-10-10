@@ -1,0 +1,117 @@
+---
+- ansible.builtin.import_playbook: preflight.yml
+
+- name: Manage workload-local disk and heartbeat alarms
+  hosts: localhost
+  gather_facts: false
+  become: false
+  vars_files: [settings.yml]
+  vars:
+    diskmon_active_instance_ids: "{{ groups.get('linux', []) | map('extract', hostvars, 'instance_id') | list }}"
+    diskmon_severities:
+      - name: warning
+        threshold: "{{ diskmon_warning_threshold }}"
+      - name: critical
+        threshold: "{{ diskmon_critical_threshold }}"
+  tasks:
+    - name: Require a workload-local SNS topic
+      ansible.builtin.assert:
+        that:
+          - diskmon_alarm_topic_arn is match('^arn:aws:sns:' ~ aws_region ~ ':' ~ workload_account_id ~ ':[A-Za-z0-9_-]+$')
+        fail_msg: Set diskmon_alarm_topic_arn to the workload alarm_topic_arn output.
+
+    - name: Reconcile missing-agent heartbeat alarms first
+      amazon.aws.cloudwatch_metric_alarm:
+        state: present
+        profile: "{{ ansible_aws_ssm_profile }}"
+        region: "{{ aws_region }}"
+        name: "diskmon-{{ diskmon_instance_id }}-heartbeat"
+        namespace: "{{ diskmon_metric_namespace }}"
+        metric_name: mem_used_percent
+        dimensions: {InstanceId: "{{ diskmon_instance_id }}"}
+        statistic: Maximum
+        comparison: LessThanThreshold
+        threshold: 0
+        period: 60
+        evaluation_periods: 5
+        datapoints_to_alarm: 3
+        treat_missing_data: breaching
+        alarm_actions: ["{{ diskmon_alarm_topic_arn }}"]
+        ok_actions: ["{{ diskmon_alarm_topic_arn }}"]
+        insufficient_data_actions: ["{{ diskmon_alarm_topic_arn }}"]
+        description: Missing CloudWatch Agent memory samples; normal nonnegative samples do not breach.
+      loop: "{{ diskmon_active_instance_ids }}"
+      loop_control: {loop_var: diskmon_instance_id}
+
+    - name: Discover disk series with automatic AWS CLI pagination
+      ansible.builtin.command:
+        argv: [aws, cloudwatch, list-metrics, --namespace, "{{ diskmon_metric_namespace }}", --metric-name, disk_used_percent, --region, "{{ aws_region }}", --profile, "{{ ansible_aws_ssm_profile }}", --output, json, --no-cli-pager]
+      register: diskmon_metric_result
+      changed_when: false
+
+    - name: Decode the metric discovery response
+      ansible.builtin.set_fact:
+        diskmon_discovered_metrics: "{{ (diskmon_metric_result.stdout | from_json).Metrics }}"
+        diskmon_target_metrics: []
+
+    - name: Validate InstanceId and the exact active-host disk dimension schema
+      vars:
+        diskmon_dimensions: "{{ diskmon_metric.Dimensions | items2dict(key_name='Name', value_name='Value') }}"
+      ansible.builtin.assert:
+        that:
+          - "'InstanceId' in diskmon_dimensions"
+          - >-
+            diskmon_dimensions.InstanceId not in diskmon_active_instance_ids
+            or (diskmon_dimensions.keys() | sort == ['InstanceId', 'fstype', 'path']
+                and diskmon_metric.Dimensions | length == 3)
+        fail_msg: Unexpected disk dimensions; check omit_hostname, drop_device and InstanceId configuration.
+      loop: "{{ diskmon_discovered_metrics | default([]) }}"
+      loop_control: {loop_var: diskmon_metric}
+
+    - name: Retain only nonexcluded series belonging to active Linux instances
+      vars:
+        diskmon_dimensions: "{{ diskmon_metric.Dimensions | items2dict(key_name='Name', value_name='Value') }}"
+      ansible.builtin.set_fact:
+        diskmon_target_metrics: "{{ diskmon_target_metrics + [diskmon_metric] }}"
+      loop: "{{ diskmon_discovered_metrics | default([]) }}"
+      loop_control: {loop_var: diskmon_metric}
+      when:
+        - diskmon_dimensions.InstanceId in diskmon_active_instance_ids
+        - diskmon_dimensions.fstype not in diskmon_excluded_fstypes
+
+    - name: Require a discovered disk series for every active Linux instance
+      vars:
+        diskmon_covered_ids: >-
+          {{ diskmon_target_metrics | map(attribute='Dimensions')
+             | map('items2dict', key_name='Name', value_name='Value')
+             | map(attribute='InstanceId') | unique | list }}
+      ansible.builtin.assert:
+        that:
+          - diskmon_active_instance_ids | difference(diskmon_covered_ids) | length == 0
+        fail_msg: Disk metrics are missing for active Linux hosts. Wait at least 15 minutes after agent startup, check publication, then rerun.
+
+    - name: Reconcile warning and critical alarms for each exact series
+      vars:
+        diskmon_dimensions: "{{ alarm_pair[0].Dimensions | items2dict(key_name='Name', value_name='Value') }}"
+        diskmon_dimension_hash: "{{ (diskmon_dimensions | dict2items | sort(attribute='key') | to_json | hash('sha1'))[:12] }}"
+      amazon.aws.cloudwatch_metric_alarm:
+        state: present
+        profile: "{{ ansible_aws_ssm_profile }}"
+        region: "{{ aws_region }}"
+        name: "diskmon-{{ diskmon_dimensions.InstanceId }}-{{ diskmon_dimension_hash }}-{{ alarm_pair[1].name }}"
+        namespace: "{{ diskmon_metric_namespace }}"
+        metric_name: disk_used_percent
+        dimensions: "{{ diskmon_dimensions }}"
+        statistic: Maximum
+        comparison: GreaterThanOrEqualToThreshold
+        threshold: "{{ alarm_pair[1].threshold }}"
+        period: 60
+        evaluation_periods: 5
+        datapoints_to_alarm: 3
+        treat_missing_data: missing
+        alarm_actions: ["{{ diskmon_alarm_topic_arn }}"]
+        ok_actions: ["{{ diskmon_alarm_topic_arn }}"]
+        insufficient_data_actions: ["{{ diskmon_alarm_topic_arn }}"]
+        description: "{{ alarm_pair[1].name }} disk usage for {{ diskmon_dimensions.path }} ({{ diskmon_dimensions.fstype }})"
+      loop: "{{ diskmon_target_metrics | default([]) | product(diskmon_severities) | list }}"
+      loop_control: {loop_var: alarm_pair}

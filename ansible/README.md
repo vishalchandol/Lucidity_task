@@ -1,9 +1,10 @@
 # Linux Disk Monitoring
 
-[monitoring.yml](monitoring.yml) has three plays: preflight, Linux agent
-configuration, and controller-side alarms. Every play loads [settings.yml](settings.yml).
-Only the explicitly selected action runs;
-omitting `monitoring_action` or using another value fails preflight.
+The Ansible workflow has two commands: [configure-agent.yml](configure-agent.yml)
+installs the CloudWatch Agent, and [alarms.yml](alarms.yml) creates disk and
+heartbeat alarms. Both import the shared [preflight.yml](preflight.yml), which
+checks account, role, Region and inventory before AWS changes. Both read
+[settings.yml](settings.yml).
 
 ## Controller And Settings
 
@@ -38,13 +39,13 @@ SSM/metric permissions and network access to SSM, S3, CloudWatch and package sou
 Transfers use controller-signed URLs and `AWS-StartInteractiveCommand`; no instance
 S3 policy is needed. Use the dedicated regional, unversioned transfer bucket.
 
-## Select One Action
+## Configure And Manage Alarms
 
 Run from the repository root after configuring the profile and settings:
 
 ```bash
-ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/monitoring.yml -e monitoring_action=configure
-ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/monitoring.yml -e monitoring_action=alarms
+ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/configure-agent.yml
+ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i ansible/inventory.aws_ec2.yml ansible/alarms.yml
 ```
 
 Inventory discovers all running instances, including untagged hosts. Windows stays
@@ -71,9 +72,13 @@ Region. The heartbeat alarm identifies VMs whose agent has stopped publishing.
 
 ## Syntax Validation
 
-On Linux/WSL, use
-`ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i 'localhost,' ansible/monitoring.yml --syntax-check`
-for an Ansible syntax check. Do not use the AWS inventory for offline checks:
-even `--syntax-check` discovers instances. `--check` still loads AWS inventory.
-Syntax checks do not prove live IAM, SSM, idempotence, published metrics,
-dashboard rendering or notification delivery. No deployment is implied.
+On Linux/WSL, use a static inventory for syntax checks:
+
+```bash
+ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i 'localhost,' ansible/configure-agent.yml --syntax-check
+ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook -i 'localhost,' ansible/alarms.yml --syntax-check
+```
+
+Do not use the AWS inventory for offline checks: even syntax checking discovers
+instances. Syntax checks do not prove live IAM, SSM, idempotence, published
+metrics, dashboard rendering or notification delivery. No deployment is implied.

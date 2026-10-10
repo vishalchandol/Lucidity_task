@@ -63,7 +63,7 @@ Ansible discovers the published disk metric series and creates or updates
 warning and critical CloudWatch alarms for each filesystem. Current defaults are
 80% and 90%, evaluated over 3 of 5 one-minute periods. It also creates a
 heartbeat alarm per discovered Linux VM to flag missing agent samples. These
-alarms are created by running the Ansible `alarms` action; the repository does
+alarms are managed by the separate `alarms.yml` playbook; the repository does
 not configure a deployment pipeline or automatic event-triggered enrollment.
 
 ### How are metrics centralized and presented?
@@ -116,11 +116,11 @@ not been load-tested in a live environment.
 ## Deliverable Map
 
 - Architecture and numbered execution flow: [architecture.md](architecture.md)
-- Main Ansible actions and access checks: [monitoring.yml](../ansible/monitoring.yml)
+- Shared access checks and Ansible workflows: [preflight.yml](../ansible/preflight.yml), [configure-agent.yml](../ansible/configure-agent.yml), [alarms.yml](../ansible/alarms.yml)
 - Dynamic EC2 inventory and runtime settings: [inventory](../ansible/inventory.aws_ec2.yml), [settings](../ansible/settings.yml)
 - Terraform account roles, transfer bucket, OAM, dashboards and notifications: [Terraform guide](../terraform/README.md)
-- Setup and terminal commands: [terminal runbook](terminal-runbook.md)
-- Security, cost and operating details: [security and cost](security-and-cost.md), [operations](operations.md)
+- Setup and commands: [Ansible guide](../ansible/README.md), [Terraform guide](../terraform/README.md)
+- Account onboarding and operating details: [operations.md](operations.md)
 
 ## Validation Status
 

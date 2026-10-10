@@ -18,9 +18,9 @@ instance-ID inventory sources. Use the approved named profile for each run.
 
 ## Repeatable Enrollment
 
-Run `monitoring.yml` with `monitoring_action=configure`, then `alarms` after
-discovery. Each action is selected explicitly on a separate run. Configuration
-uses batches of 25, bounded controller forks and repeatable tasks.
+Run `configure-agent.yml`, then `alarms.yml` after discovery and metric startup.
+Each playbook imports the same preflight checks. Configuration uses batches of
+25, bounded controller forks and repeatable tasks.
 Continuous agent publication is distributed across VMs, independent of these jobs.
 Configuration retries are bounded; unreachable hosts are visible for remediation.
 

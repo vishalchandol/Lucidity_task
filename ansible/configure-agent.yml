@@ -1,0 +1,66 @@
+---
+- ansible.builtin.import_playbook: preflight.yml
+
+- name: Configure the CloudWatch Agent on Linux VMs
+  hosts: linux
+  gather_facts: false
+  become: false
+  serial: 25
+  vars_files: [settings.yml]
+  tasks:
+    - name: Configure the CloudWatch Agent on Amazon Linux 2023
+      become: true
+      block:
+        - name: Wait for the SSM connection
+          ansible.builtin.wait_for_connection:
+            timeout: 120
+
+        - name: Gather Linux facts once
+          ansible.builtin.setup:
+
+        - name: Guard the supported agent installation platform
+          ansible.builtin.assert:
+            that:
+              - ansible_facts.distribution == 'Amazon'
+              - ansible_facts.distribution_major_version == '2023'
+              - ansible_facts.architecture in ['x86_64', 'aarch64']
+            fail_msg: Configuration supports only Amazon Linux 2023 on x86_64 or aarch64.
+
+        - name: Install the repository CloudWatch Agent package
+          ansible.builtin.package:
+            name: amazon-cloudwatch-agent
+            state: present
+          notify: Activate disk monitoring configuration
+
+        - name: Ensure the agent configuration directory exists
+          ansible.builtin.file:
+            path: "{{ diskmon_agent_config_path | dirname }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Write the disk and heartbeat configuration as JSON
+          ansible.builtin.copy:
+            content: "{{ diskmon_agent_configuration | to_nice_json }}\n"
+            dest: "{{ diskmon_agent_config_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+          notify: Activate disk monitoring configuration
+
+        - name: Apply initial configuration before starting the service
+          ansible.builtin.meta: flush_handlers
+
+        - name: Keep the CloudWatch Agent enabled and running
+          ansible.builtin.service:
+            name: amazon-cloudwatch-agent
+            enabled: true
+            state: started
+
+  handlers:
+    - name: Activate disk monitoring configuration
+      become: true
+      ansible.builtin.command:
+        argv: ["{{ diskmon_agent_ctl_path }}", -a, fetch-config, -m, ec2, -c, "file:{{ diskmon_agent_config_path }}", -s]
+      changed_when: true

@@ -53,7 +53,7 @@ demo uses its local dashboard and needs neither OAM nor central forwarding.
 		participant SNS as SNS subscribers
 
 		Note over Operator,CW: Prerequisite - approved infrastructure and role profile exist
-		Operator->>Ansible: 1. Run monitoring.yml with action configure
+		Operator->>Ansible: 1. Run configure-agent.yml
 		Ansible->>AWS: 2. Discover running VMs and verify role identity
 		AWS-->>Ansible: Inventory and account identity
 		Note over Ansible: Stop if preflight fails and reject unsupported installation platforms
@@ -62,7 +62,7 @@ demo uses its local dashboard and needs neither OAM nor central forwarding.
 
 		Note over VM,CW: Continuous collection is independent of later Ansible runs
 		VM->>CW: 4. Publish filesystem and heartbeat metrics every 60 seconds
-		Operator->>Ansible: 5. Run monitoring.yml with action alarms
+		Operator->>Ansible: 5. Run alarms.yml
 		Ansible->>CW: 6. Create heartbeat alarms for expected Linux VMs
 		Ansible->>CW: 7. Discover disk metric series
 		CW-->>Ansible: Metric names and exact dimensions
@@ -81,11 +81,11 @@ These numbers match the main actions in the sequence diagram: enrollment (1-3)
 followed by continuous metric collection and alarm setup (4-9). Step 9 occurs
 when an alarm changes state, not on every playbook run.
 
-1. **Start enrollment:** Select the approved account/Region and run `monitoring.yml -e monitoring_action=configure` with its named role profile. Supporting infrastructure must already exist.
+1. **Start enrollment:** Select the approved account/Region and run `configure-agent.yml` with its named role profile. Supporting infrastructure must already exist.
 2. **Discover and validate:** Dynamic inventory finds running VMs; preflight checks the account identity, profile, Region and Linux scope. Failed checks stop the run.
 3. **Configure the agent:** Connect through SSM/S3 and install/configure CloudWatch Agent on supported AL2023 hosts. Enrollment failures require remediation.
 4. **Collect continuously:** Each configured agent sends filesystem and heartbeat metrics to CloudWatch every 60 seconds, independently of Ansible.
-5. **Start alarm setup:** Run `monitoring.yml -e monitoring_action=alarms` separately using the same workload profile and Region.
+5. **Start alarm setup:** Run `alarms.yml` separately using the same workload profile and Region.
 6. **Create heartbeat alarms first:** Add missing-telemetry alarms for expected Linux VMs, even if disk metrics have not appeared.
 7. **Discover disk metrics:** Read published disk series and validate their exact instance/mount dimensions. Discovery alone does not prove freshness.
 8. **Create disk alarms:** If every expected VM has a discovered series, create/update warning and critical alarms. Otherwise fail disk reconciliation while retaining heartbeat alarms.
@@ -103,8 +103,9 @@ fail enrollment explicitly. Cloning the repository does not deploy resources.
 
 - **Terraform** provisions access roles, transfer storage, alarm topics,
 	dashboards, and optional cross-account integrations.
-- **Ansible** discovers EC2 instances, configures CloudWatch Agent, and creates
-	or updates workload-local CloudWatch alarms.
+- **Ansible** discovers EC2 instances, runs shared preflight checks, configures
+	CloudWatch Agent, and creates or updates workload-local CloudWatch alarms in
+	separate playbooks.
 - **CloudWatch Agent** publishes guest filesystem metrics every 60 seconds.
 - **CloudWatch** stores and presents metrics, evaluates alarms, and supports
 	account/Region dashboard views. OAM provides regional cross-account visibility;
@@ -115,7 +116,7 @@ fail enrollment explicitly. Cloning the repository does not deploy resources.
 ## Assignment Coverage
 
 1. **Access management:** SSO/STS, dedicated workload roles, and SSM access are
-	 configured in Terraform and used by Ansible.
+	configured in Terraform and checked by the shared Ansible preflight.
 2. **Collection and presentation:** The agent publishes filesystem metrics;
 	 CloudWatch dashboards and alarms provide aggregation and monitoring.
 3. **Scalability:** Dynamic EC2 inventory and repeatable per-account/Region runs
